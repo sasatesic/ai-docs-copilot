@@ -14,7 +14,6 @@ class LLMClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        print(settings.openai_api_key)
         # Standard OpenAI client
         self._client = OpenAI(api_key=settings.openai_api_key)
         self._model = settings.openai_model

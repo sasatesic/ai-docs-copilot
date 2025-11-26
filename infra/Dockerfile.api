@@ -1,0 +1,25 @@
+# infra/Dockerfile.api
+FROM python:3.11-slim
+
+# Minimal build deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Leverage Docker layer caching: lockfiles first
+COPY Pipfile Pipfile.lock ./
+RUN pip install --no-cache-dir pipenv && \
+    PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy --system
+
+# Copy source
+COPY api_service ./api_service
+COPY ingestion_service ./ingestion_service
+COPY data ./data
+COPY infra ./infra
+
+# Reasonable defaults (overridden by compose env/env_file)
+ENV QDRANT_HOST=qdrant QDRANT_PORT=6333 APP_ENV=docker LOG_LEVEL=INFO
+
+EXPOSE 8000
+CMD ["uvicorn","api_service.main:app","--host","0.0.0.0","--port","8000"]

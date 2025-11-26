@@ -1,7 +1,38 @@
-services:
+ services:
   qdrant:
     image: qdrant/qdrant:v1.16.0
     ports:
-      - "6333:6333"
+      - "6333:6333"                     # expose to host (optional but handy)
     volumes:
-      - ./qdrant_data:/qdrant/storage
+      - ./qdrant_data:/qdrant/storage   # persisted data on your disk
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    env_file:
+      - ../.env                         # contains OPENAI_API_KEY, etc. (do NOT commit)
+    environment:
+      QDRANT_HOST: qdrant               # service name, NOT localhost
+      QDRANT_PORT: "6333"
+      APP_ENV: docker
+      LOG_LEVEL: INFO
+    depends_on:
+      - qdrant
+    ports:
+      - "8000:8000"                     # FastAPI at http://127.0.0.1:8000
+
+  # On-demand ingestion runner (does not run by default)
+  ingester:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    env_file:
+      - ../.env
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    depends_on:
+      - qdrant
+    # default command (can override on the CLI)
+    command: ["python", "-m", "ingestion_service.ingest"]
