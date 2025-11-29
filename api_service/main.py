@@ -5,22 +5,24 @@ import uuid
 from api_service.config import Settings, get_settings
 from api_service.clients.llm_client import LLMClient
 from api_service.clients.vector_store_client import VectorStoreClient
+# NEW: Import RerankerClient and RerankerClient
+from api_service.clients.reranker_client import RerankerClient 
 from api_service.models.ask import AskRequest, AskResponse
-from api_service.services.rag import answer_with_rag # now an async function
+from api_service.services.rag import answer_with_rag
 from api_service.models.ask import AskRequest, AskResponse, SearchRequest, SearchResponse, SearchHit
 from ingestion_service.chunking import chunk_text
-from ingestion_service.embeddings import embed_texts, EMBEDDING_DIM # now an async function
+from ingestion_service.embeddings import embed_texts, EMBEDDING_DIM
 
 
 app = FastAPI(title="AI Docs Copilot API")
 
-# Middleware remains async
+
 @app.middleware("http")
 async def add_request_id_and_timing(request, call_next):
     start = time.time()
     request_id = str(uuid.uuid4())
 
-    response = await call_next(request) # Await the next call
+    response = await call_next(request)
 
     duration_ms = (time.time() - start) * 1000
     response.headers["X-Request-ID"] = request_id
@@ -30,7 +32,7 @@ async def add_request_id_and_timing(request, call_next):
 
 # ---- Dependency factories ----
 
-# These remain SYNCHRONOUS as they only instantiate objects, no I/O is performed.
+
 def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClient:
     return LLMClient(settings)
 
@@ -38,7 +40,12 @@ def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClient:
 def get_vector_store(
     settings: Settings = Depends(get_settings),
 ) -> VectorStoreClient:
+    # collection name is fixed for now; later we can parametrize
     return VectorStoreClient(settings, collection_name="docs")
+
+# NEW: Reranker dependency factory
+def get_reranker_client(settings: Settings = Depends(get_settings)) -> RerankerClient:
+    return RerankerClient(settings)
 
 
 # ---- Endpoints ----
@@ -46,7 +53,6 @@ def get_vector_store(
 
 @app.get("/health")
 async def health(settings: Settings = Depends(get_settings)):
-    # This is an easy place to miss, but async is necessary for consistent application
     return {
         "status": "ok",
         "env": settings.app_env,
@@ -72,15 +78,18 @@ async def debug_llm(
 
 @app.post("/ask", response_model=AskResponse)
 async def ask_docs_copilot(
-    body: AskRequest,
+    body: AskRequest, 
     settings: Settings = Depends(get_settings),
     llm: LLMClient = Depends(get_llm_client),
     vector_store: VectorStoreClient = Depends(get_vector_store),
+    # NEW: Add RerankerClient dependency
+    reranker: RerankerClient = Depends(get_reranker_client), 
 ):
     """
     Main RAG endpoint:
     - embeds question
-    - retrieves context from Qdrant
+    - retrieves context from Qdrant (now with optional filtering)
+    - re-ranks context for higher quality
     - asks LLM to answer using that context
     """
     try:
@@ -88,7 +97,10 @@ async def ask_docs_copilot(
             question=body.question,
             llm=llm,
             vector_store=vector_store,
+            # NEW: Pass the reranker client to the service function
+            reranker=reranker, 
             settings=settings,
+            source_id=body.source_id,
         )
     except Exception as e:
         # Simple error surface for now
@@ -150,12 +162,12 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
-    # This reads the file asynchronously, but we keep the main function async
+    # accept only simple UTF-8 text for now
     name = (file.filename or "").strip()
     if not name.lower().endswith((".md", ".txt")):
         raise HTTPException(status_code=400, detail="Only .md or .txt files are supported.")
 
-    raw = await file.read() # Await is already here for FastAPI's UploadFile
+    raw = await file.read()
     try:
         text = raw.decode("utf-8")
     except Exception:

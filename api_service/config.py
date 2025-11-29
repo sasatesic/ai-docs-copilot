@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     openai_api_base: str | None = None
     openai_model: str = "gpt-4.1-mini"
 
+    cohere_api_key: str | None = None # Set to None for optional use
+
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
@@ -30,4 +32,4 @@ def get_settings() -> Settings:
     """
     Cached settings instance so we don't re-read env on every request.
     """
-    return Settings()  # type: ignore[arg-type]
+    return Settings() # type: ignore[arg-type]

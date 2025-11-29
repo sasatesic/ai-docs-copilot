@@ -14,6 +14,8 @@ class RAGSource(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+    # CHANGE: Add optional source_id for filtering (Faceted RAG)
+    source_id: Optional[str] = None 
 
 
 class AskResponse(BaseModel):

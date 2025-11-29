@@ -13,6 +13,7 @@ pytest = "*"
 openai = "*"
 qdrant-client = "==1.16.0"
 python-multipart = "*"
+cohere = "*"
 
 [dev-packages]
 
