@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import List, Dict
+import asyncio # NEW: Import asyncio
 
 from api_service.config import get_settings
 from api_service.clients.vector_store_client import VectorStoreClient
@@ -37,7 +38,8 @@ def load_documents() -> List[Dict]:
     return docs
 
 
-def main() -> None:
+# CHANGE: Make the function asynchronous
+async def main() -> None:
     settings = get_settings()
     vector_store = VectorStoreClient(settings, collection_name="docs")
 
@@ -50,16 +52,20 @@ def main() -> None:
     metadatas = [d["meta"] for d in docs]
 
     print(f"Loaded {len(texts)} chunks. Creating embeddings...")
-    embeddings = embed_texts(texts, settings=settings)
+    # CHANGE: Await the async embedding call
+    embeddings = await embed_texts(texts, settings=settings)
 
     print("Ensuring Qdrant collection exists...")
-    vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
+    # CHANGE: Await the async client call
+    await vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
 
     print("Upserting embeddings into Qdrant...")
-    vector_store.upsert_embeddings(embeddings, texts, metadatas)
+    # CHANGE: Await the async client call
+    await vector_store.upsert_embeddings(embeddings, texts, metadatas)
 
     print("Done. Ingested chunks into Qdrant.")
 
 
 if __name__ == "__main__":
-    main()
+    # CHANGE: Run the async main function
+    asyncio.run(main())

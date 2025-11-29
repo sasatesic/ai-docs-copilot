@@ -1,23 +1,28 @@
 # ingestion_service/embeddings.py
 
 from typing import List
-from openai import OpenAI
+# CHANGE: Use AsyncOpenAI for all embedding operations
+from openai import AsyncOpenAI 
 
 from api_service.config import get_settings, Settings
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536  # dimension for text-embedding-3-small
+EMBEDDING_DIM = 1536  
+# ... (rest of globals)
 
 
-def get_embedding_client(settings: Settings | None = None) -> OpenAI:
+# The client factory now returns the async client
+def get_embedding_client(settings: Settings | None = None) -> AsyncOpenAI: 
     if settings is None:
         settings = get_settings()
-    return OpenAI(api_key=settings.openai_api_key)
+    # CHANGE: Instantiate AsyncOpenAI
+    return AsyncOpenAI(api_key=settings.openai_api_key) 
 
 
-def embed_texts(texts: List[str], settings: Settings | None = None) -> List[List[float]]:
+# Make the function asynchronous
+async def embed_texts(texts: List[str], settings: Settings | None = None) -> List[List[float]]:
     """
-    Embed a batch of texts using OpenAI embeddings.
+    Embed a batch of texts using OpenAI embeddings asynchronously.
     """
     if not texts:
         return []
@@ -25,10 +30,10 @@ def embed_texts(texts: List[str], settings: Settings | None = None) -> List[List
     settings = settings or get_settings()
     client = get_embedding_client(settings)
 
-    response = client.embeddings.create(
+    # Await the API call
+    response = await client.embeddings.create( 
         model=EMBEDDING_MODEL,
         input=texts,
     )
 
-    # response.data[i].embedding is already a list[float]
     return [item.embedding for item in response.data]

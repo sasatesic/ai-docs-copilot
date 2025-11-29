@@ -6,21 +6,21 @@ from api_service.config import Settings, get_settings
 from api_service.clients.llm_client import LLMClient
 from api_service.clients.vector_store_client import VectorStoreClient
 from api_service.models.ask import AskRequest, AskResponse
-from api_service.services.rag import answer_with_rag
+from api_service.services.rag import answer_with_rag # now an async function
 from api_service.models.ask import AskRequest, AskResponse, SearchRequest, SearchResponse, SearchHit
 from ingestion_service.chunking import chunk_text
-from ingestion_service.embeddings import embed_texts, EMBEDDING_DIM
+from ingestion_service.embeddings import embed_texts, EMBEDDING_DIM # now an async function
 
 
 app = FastAPI(title="AI Docs Copilot API")
 
-
+# Middleware remains async
 @app.middleware("http")
 async def add_request_id_and_timing(request, call_next):
     start = time.time()
     request_id = str(uuid.uuid4())
 
-    response = await call_next(request)
+    response = await call_next(request) # Await the next call
 
     duration_ms = (time.time() - start) * 1000
     response.headers["X-Request-ID"] = request_id
@@ -30,7 +30,7 @@ async def add_request_id_and_timing(request, call_next):
 
 # ---- Dependency factories ----
 
-
+# These remain SYNCHRONOUS as they only instantiate objects, no I/O is performed.
 def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClient:
     return LLMClient(settings)
 
@@ -38,7 +38,6 @@ def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClient:
 def get_vector_store(
     settings: Settings = Depends(get_settings),
 ) -> VectorStoreClient:
-    # collection name is fixed for now; later we can parametrize
     return VectorStoreClient(settings, collection_name="docs")
 
 
@@ -47,6 +46,7 @@ def get_vector_store(
 
 @app.get("/health")
 async def health(settings: Settings = Depends(get_settings)):
+    # This is an easy place to miss, but async is necessary for consistent application
     return {
         "status": "ok",
         "env": settings.app_env,
@@ -54,6 +54,7 @@ async def health(settings: Settings = Depends(get_settings)):
     }
 
 
+# CHANGE: Add async keyword
 @app.post("/debug/llm")
 async def debug_llm(
     prompt: str,
@@ -67,9 +68,11 @@ async def debug_llm(
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": prompt},
     ]
-    answer = llm.chat(messages, max_tokens=128)
+    # CHANGE: Await the chat call
+    answer = await llm.chat(messages, max_tokens=128)
     return {"answer": answer}
 
+# CHANGE: Add async keyword
 @app.post("/ask", response_model=AskResponse)
 async def ask_docs_copilot(
     body: AskRequest,
@@ -84,7 +87,8 @@ async def ask_docs_copilot(
     - asks LLM to answer using that context
     """
     try:
-        resp = answer_with_rag(
+        # CHANGE: Await the answer_with_rag service function
+        resp = await answer_with_rag(
             question=body.question,
             llm=llm,
             vector_store=vector_store,
@@ -99,26 +103,31 @@ async def ask_docs_copilot(
 
     return resp
 
+# CHANGE: Add async keyword
 @app.get("/documents")
 async def list_documents(vector_store: VectorStoreClient = Depends(get_vector_store)):
     try:
-        items = vector_store.list_source_ids()
+        # CHANGE: Await the client call
+        items = await vector_store.list_source_ids()
         return {"source_ids": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List error: {type(e).__name__}: {e}")
 
+# CHANGE: Add async keyword
 @app.delete("/documents/{source_id}")
 async def delete_document(
     source_id: str,
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
     try:
-        deleted = vector_store.delete_by_source_id(source_id)
+        # CHANGE: Await the client call
+        deleted = await vector_store.delete_by_source_id(source_id)
         return {"deleted": bool(deleted), "source_id": source_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete error: {type(e).__name__}: {e}")
 
 
+# CHANGE: Add async keyword
 @app.post("/search", response_model=SearchResponse)
 async def search_preview(
     body: SearchRequest,
@@ -126,9 +135,11 @@ async def search_preview(
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
     try:
-        [qvec] = embed_texts([body.query], settings=settings)
+        # CHANGE: Await embedding call
+        [qvec] = await embed_texts([body.query], settings=settings)
         filt = {"source_id": body.source_id} if body.source_id else None
-        results = vector_store.raw_search(qvec, top_k=body.top_k, filter_metadata=filt)
+        # CHANGE: Await raw_search call
+        results = await vector_store.raw_search(qvec, top_k=body.top_k, filter_metadata=filt)
         hits = [
             SearchHit(
                 score=score,
@@ -143,6 +154,7 @@ async def search_preview(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search error: {type(e).__name__}: {e}")
 
+# CHANGE: Add async keyword
 @app.post("/documents")
 async def upload_document(
     file: UploadFile = File(...),
@@ -150,12 +162,12 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
-    # accept only simple UTF-8 text for now
+    # This reads the file asynchronously, but we keep the main function async
     name = (file.filename or "").strip()
     if not name.lower().endswith((".md", ".txt")):
         raise HTTPException(status_code=400, detail="Only .md or .txt files are supported.")
 
-    raw = await file.read()
+    raw = await file.read() # Await is already here for FastAPI's UploadFile
     try:
         text = raw.decode("utf-8")
     except Exception:
@@ -166,14 +178,15 @@ async def upload_document(
         return {"ingested_chunks": 0, "source_id": source_id or name, "filename": name}
 
     # embed + upsert
-    embeddings = embed_texts(chunks, settings=settings)
-    vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
+    # CHANGE: Await the embed and vector store client calls
+    embeddings = await embed_texts(chunks, settings=settings)
+    await vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
 
     sid = source_id or name  # default source_id = filename
     metadatas = [
         {"source_file": name, "chunk_index": i, "source_id": sid}
         for i in range(len(chunks))
     ]
-    vector_store.upsert_embeddings(embeddings, chunks, metadatas)
+    await vector_store.upsert_embeddings(embeddings, chunks, metadatas)
 
     return {"ingested_chunks": len(chunks), "source_id": sid, "filename": name}

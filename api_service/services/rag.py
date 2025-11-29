@@ -6,7 +6,7 @@ from api_service.clients.llm_client import LLMClient
 from api_service.clients.vector_store_client import VectorStoreClient
 from api_service.models.ask import RAGSource, AskResponse
 from api_service.config import Settings
-from ingestion_service.embeddings import embed_texts  # reuse embeddings from ingestion
+from ingestion_service.embeddings import embed_texts # now an async function
 
 
 def build_context_from_hits(
@@ -15,6 +15,7 @@ def build_context_from_hits(
 ) -> Tuple[str, List[RAGSource]]:
     """
     Turn Qdrant hits into a context string + list of RAGSource objects.
+    (This function remains synchronous as it performs no I/O.)
     """
     context_parts: List[str] = []
     sources: List[RAGSource] = []
@@ -46,25 +47,21 @@ def build_context_from_hits(
     return context, sources
 
 
-def answer_with_rag(
+# CHANGE: Make the main function asynchronous
+async def answer_with_rag(
     question: str,
     llm: LLMClient,
     vector_store: VectorStoreClient,
     settings: Settings,
     top_k: int = 5,
 ) -> AskResponse:
-    """
-    Full RAG pipeline:
-    - embed question
-    - search in Qdrant
-    - build context
-    - call LLM with question + context
-    """
     # 1) Embed the question
-    [query_embedding] = embed_texts([question], settings=settings)
+    # CHANGE: Await the embed_texts call
+    [query_embedding] = await embed_texts([question], settings=settings)
 
     # 2) Search in Qdrant
-    hits = vector_store.search(query_vector=query_embedding, top_k=top_k)
+    # CHANGE: Await the search call
+    hits = await vector_store.search(query_vector=query_embedding, top_k=top_k)
 
     if not hits:
         # No RAG context – fall back to direct LLM answer
@@ -76,7 +73,8 @@ def answer_with_rag(
             },
             {"role": "user", "content": question},
         ]
-        answer = llm.chat(messages, max_tokens=512)
+        # CHANGE: Await the fallback chat call
+        answer = await llm.chat(messages, max_tokens=512)
         return AskResponse(answer=answer, sources=[], used_rag=False)
 
     # 3) Build context + sources
@@ -100,6 +98,7 @@ def answer_with_rag(
         {"role": "user", "content": user_prompt},
     ]
 
-    answer = llm.chat(messages, max_tokens=512)
+    # CHANGE: Await the final chat call
+    answer = await llm.chat(messages, max_tokens=512)
 
     return AskResponse(answer=answer, sources=sources, used_rag=True)

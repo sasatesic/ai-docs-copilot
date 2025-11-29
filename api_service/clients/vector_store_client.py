@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 from uuid import uuid4
 from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct, FilterSelector
 from typing import List, Tuple, Dict, Set
-from qdrant_client import QdrantClient
+from qdrant_client import AsyncQdrantClient # Changed to AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
     VectorParams,
@@ -24,18 +24,23 @@ class VectorStoreClient:
     def __init__(self, settings: Settings, collection_name: str = "docs") -> None:
         self._settings = settings
         self._collection_name = collection_name
-        self._client = QdrantClient(
+        # Instantiate AsyncQdrantClient
+        self._client = AsyncQdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
         )
 
-    def ensure_collection(self, vector_size: int) -> None:
+    # Add async and await
+    async def ensure_collection(self, vector_size: int) -> None:
         """
         Create the collection if it doesn't exist.
         """
-        existing = [c.name for c in self._client.get_collections().collections]
+        # FIX: Access the .collections attribute on the awaited response object
+        collections_response = await self._client.get_collections()
+        existing = [c.name for c in collections_response.collections] 
         if self._collection_name not in existing:
-            self._client.create_collection(
+            # Await the call to create collection
+            await self._client.create_collection(
                 collection_name=self._collection_name,
                 vectors_config=VectorParams(
                     size=vector_size,
@@ -43,7 +48,8 @@ class VectorStoreClient:
                 ),
             )
 
-    def upsert_embeddings(
+    # Add async and await
+    async def upsert_embeddings(
         self,
         embeddings: List[List[float]],
         texts: List[str],
@@ -63,12 +69,14 @@ class VectorStoreClient:
                 )
             )
 
-        self._client.upsert(
+        # Await the call to upsert
+        await self._client.upsert(
             collection_name=self._collection_name,
             points=points,
         )
 
-    def search(
+    # Add async and await
+    async def search(
     self,
     query_vector: List[float],
     top_k: int = 5,
@@ -90,10 +98,10 @@ class VectorStoreClient:
                 )
             qdrant_filter = Filter(must=conditions)
 
-        # Use query_points instead of search
-        response = self._client.query_points(
+        # Await the call to query_points
+        response = await self._client.query_points(
             collection_name=self._collection_name,
-            query=query_vector,  # Note: 'query' instead of 'query_vector'
+            query=query_vector,
             limit=top_k,
             query_filter=qdrant_filter,
         )
@@ -105,27 +113,30 @@ class VectorStoreClient:
         return results
 
 
-
-    def _collection_exists(self) -> bool:
+    # Add async and await
+    async def _collection_exists(self) -> bool:
         try:
-            self._client.get_collection(self._collection_name)
+            # Await the call to get collection
+            await self._client.get_collection(self._collection_name)
             return True
         except Exception:
             return False
 
-    def list_source_ids(self, limit: int = 1000) -> List[str]:
+    # Add async and await
+    async def list_source_ids(self, limit: int = 1000) -> List[str]:
         """
         Return up to `limit` unique source_id values.
-        Works across qdrant-client variants (tuple or object scroll).
         """
-        if not self._collection_exists():
+        # Await the call to check existence
+        if not await self._collection_exists():
             return []
 
         unique: Set[str] = set()
         offset: Optional[int] = None
 
         while True:
-            res = self._client.scroll(
+            # Await the scroll call
+            res = await self._client.scroll(
                 collection_name=self._collection_name,
                 scroll_filter=None,
                 with_payload=True,
@@ -160,29 +171,30 @@ class VectorStoreClient:
         return sorted(unique)
 
 
-
-
-    def delete_by_source_id(self, source_id: str) -> int:
+    # Add async and await
+    async def delete_by_source_id(self, source_id: str) -> int:
         flt = Filter(must=[FieldCondition(key="source_id", match=MatchValue(value=source_id))])
         try:
-            from qdrant_client.models import FilterSelector  # may not exist in some versions
+            from qdrant_client.models import FilterSelector
             selector = FilterSelector(filter=flt)
-            res = self._client.delete(
+            # Await the delete call
+            res = await self._client.delete(
                 collection_name=self._collection_name,
                 points_selector=selector,
                 wait=True,
             )
         except Exception:
-            res = self._client.delete(
+            # Await the delete call
+            res = await self._client.delete(
                 collection_name=self._collection_name,
-                points_selector=flt,  # older clients accept Filter directly
+                points_selector=flt,
                 wait=True,
             )
         return 1 if getattr(res, "status", None) == "completed" else 0
 
 
-
-    def raw_search(
+    # Add async and await
+    async def raw_search(
         self,
         query_vector: List[float],
         top_k: int = 5,
@@ -197,7 +209,8 @@ class VectorStoreClient:
             qdrant_filter = Filter(must=[
                 FieldCondition(key=k, match=MatchValue(value=v)) for k, v in filter_metadata.items()
             ])
-        resp = self._client.query_points(
+        # Await the query_points call
+        resp = await self._client.query_points(
             collection_name=self._collection_name,
             query=query_vector,
             limit=top_k,

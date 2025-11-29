@@ -1,7 +1,6 @@
-# api_service/clients/llm_client.py
-
 from typing import List, Dict, Any
-from openai import OpenAI
+# Change to import the async client
+from openai import AsyncOpenAI 
 
 from api_service.config import Settings
 
@@ -14,16 +13,17 @@ class LLMClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        # Standard OpenAI client
-        self._client = OpenAI(api_key=settings.openai_api_key)
+        # Use the AsyncOpenAI client
+        self._client = AsyncOpenAI(api_key=settings.openai_api_key) 
         self._model = settings.openai_model
 
-    def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
+    # Make the method asynchronous
+    async def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
         """
-        Synchronous helper for simple chat calls.
-        For this project that's enough; if needed we can add async later.
+        Asynchronous helper for simple chat calls.
         """
-        response = self._client.chat.completions.create(
+        # Await the API call
+        response = await self._client.chat.completions.create( 
             model=self._model,
             messages=messages,
             **kwargs,
