@@ -1,7 +1,6 @@
 # ingestion_service/embeddings.py
 
 from typing import List
-# CHANGE: Use AsyncOpenAI for all embedding operations
 from openai import AsyncOpenAI 
 
 from api_service.config import get_settings, Settings
@@ -15,7 +14,6 @@ EMBEDDING_DIM = 1536
 def get_embedding_client(settings: Settings | None = None) -> AsyncOpenAI: 
     if settings is None:
         settings = get_settings()
-    # CHANGE: Instantiate AsyncOpenAI
     return AsyncOpenAI(api_key=settings.openai_api_key) 
 
 

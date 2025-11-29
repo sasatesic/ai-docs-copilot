@@ -54,7 +54,6 @@ async def health(settings: Settings = Depends(get_settings)):
     }
 
 
-# CHANGE: Add async keyword
 @app.post("/debug/llm")
 async def debug_llm(
     prompt: str,
@@ -68,11 +67,9 @@ async def debug_llm(
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": prompt},
     ]
-    # CHANGE: Await the chat call
     answer = await llm.chat(messages, max_tokens=128)
     return {"answer": answer}
 
-# CHANGE: Add async keyword
 @app.post("/ask", response_model=AskResponse)
 async def ask_docs_copilot(
     body: AskRequest,
@@ -87,7 +84,6 @@ async def ask_docs_copilot(
     - asks LLM to answer using that context
     """
     try:
-        # CHANGE: Await the answer_with_rag service function
         resp = await answer_with_rag(
             question=body.question,
             llm=llm,
@@ -103,31 +99,26 @@ async def ask_docs_copilot(
 
     return resp
 
-# CHANGE: Add async keyword
 @app.get("/documents")
 async def list_documents(vector_store: VectorStoreClient = Depends(get_vector_store)):
     try:
-        # CHANGE: Await the client call
         items = await vector_store.list_source_ids()
         return {"source_ids": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List error: {type(e).__name__}: {e}")
 
-# CHANGE: Add async keyword
 @app.delete("/documents/{source_id}")
 async def delete_document(
     source_id: str,
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
     try:
-        # CHANGE: Await the client call
         deleted = await vector_store.delete_by_source_id(source_id)
         return {"deleted": bool(deleted), "source_id": source_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete error: {type(e).__name__}: {e}")
 
 
-# CHANGE: Add async keyword
 @app.post("/search", response_model=SearchResponse)
 async def search_preview(
     body: SearchRequest,
@@ -135,10 +126,8 @@ async def search_preview(
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
     try:
-        # CHANGE: Await embedding call
         [qvec] = await embed_texts([body.query], settings=settings)
         filt = {"source_id": body.source_id} if body.source_id else None
-        # CHANGE: Await raw_search call
         results = await vector_store.raw_search(qvec, top_k=body.top_k, filter_metadata=filt)
         hits = [
             SearchHit(
@@ -154,7 +143,6 @@ async def search_preview(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search error: {type(e).__name__}: {e}")
 
-# CHANGE: Add async keyword
 @app.post("/documents")
 async def upload_document(
     file: UploadFile = File(...),
@@ -178,7 +166,6 @@ async def upload_document(
         return {"ingested_chunks": 0, "source_id": source_id or name, "filename": name}
 
     # embed + upsert
-    # CHANGE: Await the embed and vector store client calls
     embeddings = await embed_texts(chunks, settings=settings)
     await vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
 

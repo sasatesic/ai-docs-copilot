@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 from uuid import uuid4
 from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct, FilterSelector
 from typing import List, Tuple, Dict, Set
-from qdrant_client import AsyncQdrantClient # Changed to AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient 
 from qdrant_client.models import (
     Distance,
     VectorParams,

@@ -47,7 +47,6 @@ def build_context_from_hits(
     return context, sources
 
 
-# CHANGE: Make the main function asynchronous
 async def answer_with_rag(
     question: str,
     llm: LLMClient,
@@ -56,11 +55,9 @@ async def answer_with_rag(
     top_k: int = 5,
 ) -> AskResponse:
     # 1) Embed the question
-    # CHANGE: Await the embed_texts call
     [query_embedding] = await embed_texts([question], settings=settings)
 
     # 2) Search in Qdrant
-    # CHANGE: Await the search call
     hits = await vector_store.search(query_vector=query_embedding, top_k=top_k)
 
     if not hits:
@@ -73,7 +70,6 @@ async def answer_with_rag(
             },
             {"role": "user", "content": question},
         ]
-        # CHANGE: Await the fallback chat call
         answer = await llm.chat(messages, max_tokens=512)
         return AskResponse(answer=answer, sources=[], used_rag=False)
 
@@ -98,7 +94,6 @@ async def answer_with_rag(
         {"role": "user", "content": user_prompt},
     ]
 
-    # CHANGE: Await the final chat call
     answer = await llm.chat(messages, max_tokens=512)
 
     return AskResponse(answer=answer, sources=sources, used_rag=True)

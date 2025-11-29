@@ -1,5 +1,4 @@
 from typing import List, Dict, Any
-# Change to import the async client
 from openai import AsyncOpenAI 
 
 from api_service.config import Settings
