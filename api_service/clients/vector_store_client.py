@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 from uuid import uuid4
 from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct, FilterSelector
 from typing import List, Tuple, Dict, Set
-from qdrant_client import AsyncQdrantClient 
+from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
     VectorParams,
@@ -30,12 +30,11 @@ class VectorStoreClient:
             port=settings.qdrant_port,
         )
 
-    # Add async and await
+    # REVERTED: Removed problematic create_payload_index call.
     async def ensure_collection(self, vector_size: int) -> None:
         """
         Create the collection if it doesn't exist.
         """
-        # FIX: Access the .collections attribute on the awaited response object
         collections_response = await self._client.get_collections()
         existing = [c.name for c in collections_response.collections] 
         if self._collection_name not in existing:
@@ -48,7 +47,7 @@ class VectorStoreClient:
                 ),
             )
 
-    # Add async and await
+
     async def upsert_embeddings(
         self,
         embeddings: List[List[float]],
@@ -75,17 +74,18 @@ class VectorStoreClient:
             points=points,
         )
 
-    # Add async and await
+    # REVERSED: Search method now only takes the vector (pure dense search)
     async def search(
     self,
-    query_vector: List[float],
+    query_vector: List[float], # Only vector here
     top_k: int = 5,
     filter_metadata: dict | None = None,
 ) -> List[Tuple[float, dict]]:
         """
-        Search by vector. Optionally filter by simple metadata equality.
+        Performs a pure Vector Search.
         Returns (score, payload) tuples.
         """
+        
         qdrant_filter = None
         if filter_metadata:
             conditions = []
@@ -98,10 +98,10 @@ class VectorStoreClient:
                 )
             qdrant_filter = Filter(must=conditions)
 
-        # Await the call to query_points
+        # Use query_points for dense search
         response = await self._client.query_points(
             collection_name=self._collection_name,
-            query=query_vector,
+            query=query_vector,       
             limit=top_k,
             query_filter=qdrant_filter,
         )
@@ -111,23 +111,69 @@ class VectorStoreClient:
             results.append((point.score, point.payload or {}))
 
         return results
+    
+    # NEW METHOD: For pure Keyword/Sparse Search (RRF requirement)
+    async def sparse_search(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        filter_metadata: dict | None = None,
+    ) -> List[Tuple[float, dict]]:
+        """
+        Performs a pure Keyword/Sparse search (uses Qdrant's Match filter).
+        Returns (score, payload) tuples.
+        """
+        
+        conditions = []
+        if filter_metadata:
+            for key, value in filter_metadata.items():
+                conditions.append(
+                    FieldCondition(
+                        key=key,
+                        match=MatchValue(value=value),
+                    )
+                )
+
+        # Perform keyword matching on the 'text' field
+        conditions.append(
+            FieldCondition(
+                key="text", 
+                match=MatchValue(value=query_text)
+            )
+        )
+        
+        qdrant_filter = Filter(must=conditions)
+        
+        # Use scroll to fetch results based on the keyword filter
+        res = await self._client.scroll(
+            collection_name=self._collection_name,
+            scroll_filter=qdrant_filter,
+            with_payload=True,
+            with_vectors=False,
+            limit=top_k,
+            offset=None,
+        )
+
+        results: List[Tuple[float, dict]] = []
+        
+        # We assign a synthetic score based on rank for RRF to work.
+        for i, p in enumerate(res[0]): 
+            # Synthetic score based on rank (1.0 for first, 0.9 for second, etc.)
+            synthetic_score = 1.0 - (i / (top_k * 2.0)) 
+            payload = getattr(p, "payload", {}) or {}
+            results.append((synthetic_score, payload))
+
+        return results
 
 
-    # Add async and await
     async def _collection_exists(self) -> bool:
         try:
-            # Await the call to get collection
             await self._client.get_collection(self._collection_name)
             return True
         except Exception:
             return False
 
-    # Add async and await
     async def list_source_ids(self, limit: int = 1000) -> List[str]:
-        """
-        Return up to `limit` unique source_id values.
-        """
-        # Await the call to check existence
         if not await self._collection_exists():
             return []
 
@@ -135,7 +181,6 @@ class VectorStoreClient:
         offset: Optional[int] = None
 
         while True:
-            # Await the scroll call
             res = await self._client.scroll(
                 collection_name=self._collection_name,
                 scroll_filter=None,
@@ -145,9 +190,6 @@ class VectorStoreClient:
                 offset=offset,
             )
 
-            # Support both return shapes:
-            #  - tuple: (points, next_offset)
-            #  - object: res.points, res.next_page_offset
             if isinstance(res, tuple):
                 points, offset = res
             else:
@@ -170,21 +212,17 @@ class VectorStoreClient:
 
         return sorted(unique)
 
-
-    # Add async and await
     async def delete_by_source_id(self, source_id: str) -> int:
         flt = Filter(must=[FieldCondition(key="source_id", match=MatchValue(value=source_id))])
         try:
             from qdrant_client.models import FilterSelector
             selector = FilterSelector(filter=flt)
-            # Await the delete call
             res = await self._client.delete(
                 collection_name=self._collection_name,
                 points_selector=selector,
                 wait=True,
             )
         except Exception:
-            # Await the delete call
             res = await self._client.delete(
                 collection_name=self._collection_name,
                 points_selector=flt,
@@ -193,7 +231,6 @@ class VectorStoreClient:
         return 1 if getattr(res, "status", None) == "completed" else 0
 
 
-    # Add async and await
     async def raw_search(
         self,
         query_vector: List[float],

@@ -1,19 +1,19 @@
 # api_service/services/rag.py
 
-from typing import List, Tuple, Optional # Added Optional
-from pydantic import BaseModel # Added BaseModel if not imported
+from typing import List, Tuple, Dict, Any
+from collections import defaultdict # NEW: defaultdict for RRF
 
 from api_service.clients.llm_client import LLMClient
 from api_service.clients.vector_store_client import VectorStoreClient
-# NEW: Import RerankerClient
 from api_service.clients.reranker_client import RerankerClient 
 from api_service.models.ask import RAGSource, AskResponse
 from api_service.config import Settings
 from ingestion_service.embeddings import embed_texts  # reuse embeddings from ingestion
 
-# Constants for retrieval and re-ranking
 SEARCH_K = 20 # Retrieve more documents from vector search
 RERANK_N = 5  # Select the top N relevant documents for the LLM context
+# NEW: Constant for RRF
+RRF_K = 60    # A constant for Reciprocal Rank Fusion
 
 
 def build_context_from_hits(
@@ -53,23 +53,50 @@ def build_context_from_hits(
     return context, sources
 
 
+# NEW FUNCTION: Reciprocal Rank Fusion (RRF)
+def reciprocal_rank_fusion(
+    ranked_lists: List[List[Tuple[float, Dict[str, Any]]]],
+    k: int = RRF_K
+) -> List[Tuple[float, Dict[str, Any]]]:
+    """
+    Combines multiple ranked lists (e.g., vector and sparse search) using RRF.
+    """
+    fused_scores = defaultdict(float)
+    document_map = {} # Maps unique key (e.g., source_id + text) to its payload
+
+    for ranked_list in ranked_lists:
+        for rank, (score, payload) in enumerate(ranked_list, start=1):
+            
+            # Create a unique key for the document payload
+            # NOTE: We use the raw text, as chunks are guaranteed to be unique
+            doc_key = payload.get("source_file", "") + payload.get("text", "") 
+            document_map[doc_key] = payload
+            
+            # RRF formula: 1 / (k + rank)
+            fused_scores[doc_key] += 1.0 / (k + rank)
+
+    # Convert the fused scores back to a list of (score, payload)
+    final_results = []
+    for doc_key, score in fused_scores.items():
+        final_results.append((score, document_map[doc_key]))
+
+    # Sort by the new fused RRF score in descending order
+    final_results.sort(key=lambda x: x[0], reverse=True)
+    
+    return final_results
+
+
 async def answer_with_rag(
     question: str,
     llm: LLMClient,
     vector_store: VectorStoreClient,
-    # NEW: RerankerClient dependency
     reranker: RerankerClient,
     settings: Settings,
-    top_k: int = RERANK_N, # Use the RERANK_N constant here for context size
+    top_k: int = RERANK_N, 
     source_id: str | None = None,
 ) -> AskResponse:
     """
-    Full RAG pipeline with **Re-ranking**:
-    - embed question
-    - search in Qdrant for a large set (SEARCH_K)
-    - re-rank the search results to find the best subset (RERANK_N)
-    - build context
-    - call LLM with question + context
+    Full RAG pipeline with **Hybrid Search (RRF)** and Re-ranking.
     """
     # 1) Embed the question
     [query_embedding] = await embed_texts([question], settings=settings)
@@ -77,12 +104,24 @@ async def answer_with_rag(
     # Prepare metadata filter for Qdrant
     filter_metadata = {"source_id": source_id} if source_id else None
 
-    # 2) Initial Search in Qdrant (Retrieve a larger set of documents)
-    hits = await vector_store.search(
+    # 2) Initial Search (Hybrid RRF)
+    # A) Dense Search (Vector)
+    dense_hits = await vector_store.search(
         query_vector=query_embedding, 
-        top_k=SEARCH_K, # Use SEARCH_K here
+        top_k=SEARCH_K, 
         filter_metadata=filter_metadata
     )
+    
+    # B) Sparse Search (Keyword)
+    sparse_hits = await vector_store.sparse_search(
+        query_text=question, 
+        top_k=SEARCH_K, 
+        filter_metadata=filter_metadata
+    )
+
+    # C) Combine ranks using RRF
+    hits = reciprocal_rank_fusion([dense_hits, sparse_hits], k=RRF_K)
+
 
     if not hits:
         # No RAG context – fall back to direct LLM answer
@@ -98,7 +137,6 @@ async def answer_with_rag(
         return AskResponse(answer=answer, sources=[], used_rag=False)
 
     # 2.5) Rerank the initial hits to find the most relevant N
-    # NEW STEP: Await the rerank client call
     final_hits = await reranker.rerank(
         query=question, 
         documents=hits, 
