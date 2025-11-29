@@ -2,9 +2,8 @@
 
 from typing import List
 
-# Define the sequence of separators to try, from largest to smallest structural break
-SEPARATORS = ["\n\n", "\n", ". ", " "] 
-
+# Define separators from largest structure to smallest
+SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
 def chunk_text(
     text: str,
@@ -12,69 +11,89 @@ def chunk_text(
     overlap: int = 200,
 ) -> List[str]:
     """
-    Splits text recursively based on a list of separators to maintain logical structure.
+    Recursively splits text into small meaningful pieces (preserving separators),
+    then merges them into chunks with overlap.
     """
-    def _split_recursively(text_to_split: str, separators: List[str]) -> List[str]:
-        # --- Base Case ---
+    if not text:
+        return []
+
+    # --- 1. Recursive Splitter (Produces atomic pieces with separators attached) ---
+    def _split_atomic(text_segment: str, separators: List[str]) -> List[str]:
+        # Base case: no more separators, or text is already small enough
         if not separators:
-            # Fallback to simple character split if no structured separators work
-            chunks = []
-            start = 0
-            while start < len(text_to_split):
-                end = min(start + max_chars, len(text_to_split))
-                chunks.append(text_to_split[start:end].strip())
-                # Sliding window overlap logic
-                start += max_chars - overlap
-            return [c for c in chunks if c]
-
-        # --- Recursive Step ---
-        separator = separators[0]
-        sub_separators = separators[1:]
+            return [text_segment]
         
-        # 1. Handle empty separator case (or fall through)
-        if not separator:
-            return _split_recursively(text_to_split, sub_separators)
-
-        # 2. Split text by current separator
-        parts = text_to_split.split(separator)
+        sep = separators[0]
+        next_seps = separators[1:]
         
-        final_chunks = []
-        current_chunk = ""
-
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-
-            # Try to merge part into current chunk
-            if current_chunk:
-                # Add separator back in the calculation for accurate length
-                potential_chunk = current_chunk + separator + part
-            else:
-                potential_chunk = part
+        if sep == "": # Character split fallback
+            return [c for c in text_segment]
             
-            if len(potential_chunk) <= max_chars:
-                current_chunk = potential_chunk
+        if sep not in text_segment:
+            return _split_atomic(text_segment, next_seps)
+            
+        # Split and keep separators attached to the previous segment
+        # e.g. "Hello world" -> ["Hello ", "world"]
+        parts = text_segment.split(sep)
+        final_pieces = []
+        
+        for i, part in enumerate(parts):
+            # Re-attach separator to all but the last part
+            if i < len(parts) - 1:
+                part_with_sep = part + sep
             else:
-                # Current chunk is too big. Finalize the current_chunk (if exists)
-                if current_chunk:
-                    final_chunks.append(current_chunk)
+                part_with_sep = part
                 
-                # If the current part itself is too big, recurse with the next separator
-                if len(part) > max_chars:
-                    recursive_chunks = _split_recursively(part, sub_separators)
-                    final_chunks.extend(recursive_chunks)
-                    current_chunk = ""
+            if len(part_with_sep) > max_chars:
+                # If this piece is still too big, recurse deeper
+                final_pieces.extend(_split_atomic(part_with_sep, next_seps))
+            else:
+                final_pieces.append(part_with_sep)
+                
+        return final_pieces
+
+    # Get all the small atomic pieces (sentences, words, etc.)
+    pieces = _split_atomic(text, SEPARATORS)
+    
+    # --- 2. Merger with Overlap ---
+    chunks = []
+    current_buffer = []
+    current_len = 0
+    
+    for piece in pieces:
+        piece_len = len(piece)
+        
+        # If adding this piece exceeds limits, finalize the current chunk
+        if current_len + piece_len > max_chars and current_buffer:
+            # Emit the chunk
+            full_chunk = "".join(current_buffer).strip()
+            if full_chunk:
+                chunks.append(full_chunk)
+            
+            # --- BACKTRACK FOR OVERLAP ---
+            # Keep pieces from the end of the buffer until we satisfy the overlap length
+            overlap_buffer = []
+            overlap_len = 0
+            
+            # Walk backwards through the current buffer
+            for p in reversed(current_buffer):
+                if overlap_len < overlap:
+                    overlap_buffer.insert(0, p) # Add to front to maintain order
+                    overlap_len += len(p)
                 else:
-                    # Current part fits, but was blocked by max_chars limit previously
-                    current_chunk = part # Start new chunk with the current part
-
-        # Handle the last remaining chunk
-        if current_chunk:
-            final_chunks.append(current_chunk)
-
-        # Apply cleanup and return
-        return [c.strip() for c in final_chunks if c.strip()]
-
-
-    return _split_recursively(text, SEPARATORS)
+                    break
+            
+            # Start the new chunk with the overlapping content
+            current_buffer = list(overlap_buffer)
+            current_len = overlap_len
+            
+        current_buffer.append(piece)
+        current_len += piece_len
+        
+    # Add the final chunk
+    if current_buffer:
+        full_chunk = "".join(current_buffer).strip()
+        if full_chunk:
+            chunks.append(full_chunk)
+            
+    return chunks
