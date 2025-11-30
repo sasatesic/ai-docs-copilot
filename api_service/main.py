@@ -1,29 +1,34 @@
 from fastapi import FastAPI, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import time
 import uuid
 
 from api_service.config import Settings, get_settings
 from api_service.clients.llm_client import LLMClient
 from api_service.clients.vector_store_client import VectorStoreClient
-# NEW: Import RerankerClient and RerankerClient
-from api_service.clients.reranker_client import RerankerClient 
-from api_service.models.ask import AskRequest, AskResponse
-from api_service.services.rag import answer_with_rag
+from api_service.clients.reranker_client import RerankerClient
 from api_service.models.ask import AskRequest, AskResponse, SearchRequest, SearchResponse, SearchHit
+from api_service.services.rag import answer_with_rag, stream_answer_with_rag
 from ingestion_service.chunking import chunk_text
 from ingestion_service.embeddings import embed_texts, EMBEDDING_DIM
 
 
 app = FastAPI(title="AI Docs Copilot API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
 async def add_request_id_and_timing(request, call_next):
     start = time.time()
     request_id = str(uuid.uuid4())
-
     response = await call_next(request)
-
     duration_ms = (time.time() - start) * 1000
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time-ms"] = f"{duration_ms:.2f}"
@@ -32,24 +37,17 @@ async def add_request_id_and_timing(request, call_next):
 
 # ---- Dependency factories ----
 
-
 def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClient:
     return LLMClient(settings)
 
-
-def get_vector_store(
-    settings: Settings = Depends(get_settings),
-) -> VectorStoreClient:
-    # collection name is fixed for now; later we can parametrize
+def get_vector_store(settings: Settings = Depends(get_settings)) -> VectorStoreClient:
     return VectorStoreClient(settings, collection_name="docs")
 
-# NEW: Reranker dependency factory
 def get_reranker_client(settings: Settings = Depends(get_settings)) -> RerankerClient:
     return RerankerClient(settings)
 
 
 # ---- Endpoints ----
-
 
 @app.get("/health")
 async def health(settings: Settings = Depends(get_settings)):
@@ -59,57 +57,56 @@ async def health(settings: Settings = Depends(get_settings)):
         "model": settings.openai_model,
     }
 
-
 @app.post("/debug/llm")
-async def debug_llm(
-    prompt: str,
-    llm: LLMClient = Depends(get_llm_client),
-):
-    """
-    Simple endpoint to verify LLM client works.
-    It just echoes the prompt with a short answer.
-    """
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": prompt},
-    ]
+async def debug_llm(prompt: str, llm: LLMClient = Depends(get_llm_client)):
+    messages = [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": prompt}]
     answer = await llm.chat(messages, max_tokens=128)
     return {"answer": answer}
 
 @app.post("/ask", response_model=AskResponse)
 async def ask_docs_copilot(
-    body: AskRequest, 
+    body: AskRequest,
     settings: Settings = Depends(get_settings),
     llm: LLMClient = Depends(get_llm_client),
     vector_store: VectorStoreClient = Depends(get_vector_store),
-    # NEW: Add RerankerClient dependency
-    reranker: RerankerClient = Depends(get_reranker_client), 
+    reranker: RerankerClient = Depends(get_reranker_client),
 ):
-    """
-    Main RAG endpoint:
-    - embeds question
-    - retrieves context from Qdrant (now with optional filtering)
-    - re-ranks context for higher quality
-    - asks LLM to answer using that context
-    """
     try:
         resp = await answer_with_rag(
             question=body.question,
             llm=llm,
             vector_store=vector_store,
-            # NEW: Pass the reranker client to the service function
-            reranker=reranker, 
+            reranker=reranker,
             settings=settings,
             source_id=body.source_id,
         )
     except Exception as e:
-        # Simple error surface for now
-        raise HTTPException(
-            status_code=500,
-            detail=f"RAG error: {type(e).__name__}: {e}",
-        )
-
+        raise HTTPException(status_code=500, detail=f"RAG error: {type(e).__name__}: {e}")
     return resp
+
+@app.post("/chat_stream")
+async def chat_stream_endpoint(
+    body: AskRequest,
+    settings: Settings = Depends(get_settings),
+    llm: LLMClient = Depends(get_llm_client),
+    vector_store: VectorStoreClient = Depends(get_vector_store),
+    reranker: RerankerClient = Depends(get_reranker_client),
+):
+    """
+    Streams the RAG response: sources first, then text tokens.
+    """
+    async def generator():
+        async for chunk in stream_answer_with_rag(
+            question=body.question,
+            llm=llm,
+            vector_store=vector_store,
+            reranker=reranker,
+            settings=settings,
+            source_id=body.source_id,
+        ):
+            yield chunk
+
+    return StreamingResponse(generator(), media_type="application/x-ndjson")
 
 @app.get("/documents")
 async def list_documents(vector_store: VectorStoreClient = Depends(get_vector_store)):
@@ -120,16 +117,12 @@ async def list_documents(vector_store: VectorStoreClient = Depends(get_vector_st
         raise HTTPException(status_code=500, detail=f"List error: {type(e).__name__}: {e}")
 
 @app.delete("/documents/{source_id}")
-async def delete_document(
-    source_id: str,
-    vector_store: VectorStoreClient = Depends(get_vector_store),
-):
+async def delete_document(source_id: str, vector_store: VectorStoreClient = Depends(get_vector_store)):
     try:
         deleted = await vector_store.delete_by_source_id(source_id)
         return {"deleted": bool(deleted), "source_id": source_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete error: {type(e).__name__}: {e}")
-
 
 @app.post("/search", response_model=SearchResponse)
 async def search_preview(
@@ -162,26 +155,41 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     vector_store: VectorStoreClient = Depends(get_vector_store),
 ):
-    # accept only simple UTF-8 text for now
     name = (file.filename or "").strip()
-    if not name.lower().endswith((".md", ".txt")):
-        raise HTTPException(status_code=400, detail="Only .md or .txt files are supported.")
+    if not name.lower().endswith((".md", ".txt", ".pdf", ".docx", ".pptx", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Unsupported file type.")
 
+    # We read the file content as bytes for the parsers
     raw = await file.read()
+    
+    # We import parsers here to avoid circular imports or just for cleanliness
+    # In a real app, this logic might be in a service
+    from ingestion_service.parsers import parse_pdf, parse_docx, parse_pptx, parse_xlsx
+    
+    text = ""
     try:
-        text = raw.decode("utf-8")
-    except Exception:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 text.")
+        ext = name.lower().split('.')[-1]
+        if ext in ["md", "txt"]:
+            text = raw.decode("utf-8")
+        elif ext == "pdf":
+            text = parse_pdf(raw)
+        elif ext == "docx":
+            text = parse_docx(raw)
+        elif ext == "pptx":
+            text = parse_pptx(raw)
+        elif ext == "xlsx":
+            text = parse_xlsx(raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
 
     chunks = chunk_text(text)
     if not chunks:
         return {"ingested_chunks": 0, "source_id": source_id or name, "filename": name}
 
-    # embed + upsert
     embeddings = await embed_texts(chunks, settings=settings)
     await vector_store.ensure_collection(vector_size=EMBEDDING_DIM)
 
-    sid = source_id or name  # default source_id = filename
+    sid = source_id or name
     metadatas = [
         {"source_file": name, "chunk_index": i, "source_id": sid}
         for i in range(len(chunks))
