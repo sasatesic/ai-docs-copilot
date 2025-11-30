@@ -15,6 +15,11 @@ qdrant-client = "==1.16.0"
 python-multipart = "*"
 cohere = "*"
 pytest-asyncio = "*"
+pypdf = "*"
+python-docx = "*"
+python-pptx = "*"
+openpyxl = "*"
+reportlab = "*"
 
 [dev-packages]
 
